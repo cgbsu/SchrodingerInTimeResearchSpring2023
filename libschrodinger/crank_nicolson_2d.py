@@ -38,7 +38,10 @@ def makeLinspaceGrid(pointCount : int, length : float, dimensions : int, halfSpa
     return MeshGrid(np.meshgrid(*spaces), pointCount, length)
 
 def applyEdge(grid : MeshGrid, value : float = 0.0) -> MeshGrid: 
-    grid[0, :] = grid[-1, :] = grid[:, 0] = grid[:, -1] = value
+    grid[0, :] = value
+    grid[-1, :] = value
+    grid[:, 0] = value
+    grid[:, -1] = value
     return grid
 
 class SimulationProfile: 
@@ -105,7 +108,7 @@ def createCurrentStepMatrix(simulator, currentPotential):
 def createNextStepMatrix(simulator, nextPotential): 
     math = simulator.math
     sparse = simulator.sparse
-    unkownFactorCount = simulator.unknownFactorCount
+    unknownFactorCount = simulator.unknownFactorCount
     unknownCenterDiagonal = 1j * simulator.timeStep / 2 * nextPotential.ravel()
     unknownCenterDiagonal = 1 + math.sum(simulator.stepConstants * 2.0) + unknownCenterDiagonal
     diagonalLength = len(unknownCenterDiagonal)
@@ -148,9 +151,9 @@ class Simulator:
         waveFunctionVector = self.waveFunctions[-1].reshape((self.diagonalLength, 1))
         #waveFunctionVector = self.waveFunctions[-1]
         independantTerms = knownStepMatrix * waveFunctionVector #math.matmul(knownStepMatrix, waveFunctionVector)
-        nextWaveFunction = sparse.linalg.spsolve(sparse.csc_matrix(unknownStepMatrix), independantTerms).reshape(
+        nextWaveFunction = applyEdge(sparse.linalg.spsolve(sparse.csc_matrix(unknownStepMatrix), independantTerms).reshape(
                 tuple([self.grid.pointCount] * self.dimensions), 
-            )
+            ))
         self.waveFunctions.append(nextWaveFunction)
         return self.waveFunctions[-1], self.potentials[-1]
 
