@@ -5,6 +5,10 @@ import scipy.sparse as spsparse
 import cupy as cp
 import cupyx.scipy.sparse as cpsparse
 import matplotlib.pyplot as plt
+from typing import List
+from typing import Tuple
+from matplotlib.animation import FuncAnimation
+
 
 class DimensionIndex(Enum):
     X = 0
@@ -88,39 +92,50 @@ def placeDiagonals(
             rowLength
         )
 
-def createCurrentStepMatrix(simulator, currentPotential):
+def toDiagonal(vector : np.array, math, sparse): 
+    return sparse.spdiags( 
+            math.array([vector]), 
+            math.array([0]), 
+            len(vector), 
+            len(vector)
+        )
+
+def createStepMatrix(simulator, currentPotential, scalar, innerDiagonal, outerDiagonal):
     math = simulator.math
     sparse = simulator.sparse
     unknownFactorCount = simulator.unknownFactorCount
-    knownCenterDiagonal = 1j * simulator.timeStep / 2 * currentPotential.ravel()
-    knownCenterDiagonal = 1 + math.sum(-simulator.stepConstants * 2.0) - knownCenterDiagonal
-    diagonalLength = len(knownCenterDiagonal)
-    knownStepMatrix = placeDiagonals(
-                knownCenterDiagonal, 
-                simulator.knownInnerDiagonal, 
-                simulator.knownOuterDiagonal, 
-                diagonalLength, 
+    centerDiagonal = (1j * simulator.timeStep / 2) * currentPotential[1:-1, 1:-1].ravel()
+    centerDiagonal = 1 + math.sum(scalar * simulator.stepConstants * 2.0) + (scalar * centerDiagonal)
+    diagonalLength = len(centerDiagonal) - 2
+    #print("V:", currentPotential[1:-1, 1:-1].ravel())
+    #print("C:", centerDiagonal)
+    stepMatrix = placeDiagonals(
+                centerDiagonal, 
+                innerDiagonal, 
+                outerDiagonal, 
+                unknownFactorCount, 
                 math, 
                 sparse
             )
-    return knownStepMatrix
+    return stepMatrix
+
+def createCurrentStepMatrix(simulator, currentPotential): 
+    return createStepMatrix(
+            simulator, 
+            currentPotential, 
+            -1, 
+            simulator.knownInnerDiagonal, 
+            simulator.knownOuterDiagonal
+        )
 
 def createNextStepMatrix(simulator, nextPotential): 
-    math = simulator.math
-    sparse = simulator.sparse
-    unknownFactorCount = simulator.unknownFactorCount
-    unknownCenterDiagonal = 1j * simulator.timeStep / 2 * nextPotential.ravel()
-    unknownCenterDiagonal = 1 + math.sum(simulator.stepConstants * 2.0) + unknownCenterDiagonal
-    diagonalLength = len(unknownCenterDiagonal)
-    unknownStepMatrix = placeDiagonals(
-                unknownCenterDiagonal, 
-                simulator.unknownInnerDiagonal, 
-                simulator.unknownOuterDiagonal, 
-                diagonalLength, 
-                math, 
-                sparse
-            )
-    return unknownStepMatrix
+    return createStepMatrix(
+            simulator, 
+            nextPotential, 
+            1, 
+            simulator.unknownInnerDiagonal, 
+            simulator.unknownOuterDiagonal
+        )
 
 class Simulator: 
     def __init__(self, profile : SimulationProfile): 
@@ -138,7 +153,7 @@ class Simulator:
                 self.profile.potentialGenerator(self.grid, self.timeStep)
             ]
         self.unknownFactorCount = (self.grid.pointCount - 2) ** self.dimensions
-        self.diagonalLength = len(self.potentials[-1].ravel())
+        self.diagonalLength = self.unknownFactorCount #(len(self.potentials[-1]) - 2) * (len(self.potentials[-1][0]) - 2)
         self.knownInnerDiagonal = self.math.ones(self.diagonalLength) * self.stepConstants[0]
         self.knownOuterDiagonal = self.math.ones(self.diagonalLength) * self.stepConstants[1]
         self.unknownInnerDiagonal = -1 * self.knownInnerDiagonal # These two just to save a bit of compute
@@ -148,13 +163,13 @@ class Simulator:
     def compute(self, time, maxTime, unknownStepMatrix, knownStepMatrix): 
         math = self.math
         sparse = self.sparse
-        waveFunctionVector = self.waveFunctions[-1].reshape((self.diagonalLength, 1))
+        waveFunctionVector = self.waveFunctions[-1][1:-1, 1:-1].reshape((self.diagonalLength, 1))
         #waveFunctionVector = self.waveFunctions[-1]
         independantTerms = knownStepMatrix * waveFunctionVector #math.matmul(knownStepMatrix, waveFunctionVector)
-        nextWaveFunction = applyEdge(sparse.linalg.spsolve(sparse.csc_matrix(unknownStepMatrix), independantTerms).reshape(
-                tuple([self.grid.pointCount] * self.dimensions), 
-            ))
-        self.waveFunctions.append(nextWaveFunction)
+        nextWaveFunction = sparse.linalg.spsolve(sparse.csc_matrix(unknownStepMatrix), independantTerms).reshape(
+                tuple([self.grid.pointCount - 2] * self.dimensions), 
+            )
+        self.waveFunctions.append(np.pad(nextWaveFunction, 1))
         return self.waveFunctions[-1], self.potentials[-1]
 
     def simulate(self, maxTime): 
@@ -187,6 +202,16 @@ class Simulator:
 def makeWavePacket(grid, startX, startY, sigma=0.5, k = 15 * np.pi): 
     return np.exp((-1 / (2 * sigma ** 2)) * ((grid.x - startX) ** 2 + (grid.y - startY) ** 2)) \
             * np.exp(-1j * k * (grid.x - startX))
+def animateImages(pointCount : int, images : List[np.array]): 
+    animationFigure = plt.figure()
+    animationAxis = animationFigure.add_subplot(xlim=(0, pointCount), ylim=(0, pointCount))
+    animationFrame = animationAxis.imshow(images[0])
+    def animateFrame(frameIndex): 
+        animationFrame.set_data(images[frameIndex])
+        animationFrame.set_zorder(1)
+        return animationFrame,
+    animation = FuncAnimation(animationFigure, animateFrame, interval=1, frames=np.arange(0, len(images), 2), repeat = True, blit = 0)
+    return animation
 
 if __name__ == "__main__": 
     pointCount : int = 50
