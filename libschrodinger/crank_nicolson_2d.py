@@ -11,6 +11,8 @@ from matplotlib.animation import FuncAnimation
 import numba
 from numba import njit
 from numba import jit
+import scipy.sparse.linalg as spla
+import cupyx.scipy.sparse.linalg as cpla
 
 
 class DimensionIndex(Enum):
@@ -20,7 +22,8 @@ class DimensionIndex(Enum):
     W = 3
 
 class MeshGrid: 
-    def __init__(self, gridDimensionalComponents : tuple[np.ndarray], pointCount : int, length : float): 
+    def __init__(self, gridDimensionalComponents : tuple[np.ndarray], pointCount : int, length : float, math = np): 
+        self.math = math
         self.pointCount = pointCount
         self.length = length
         self.gridDimensionalComponents : tuple[np.ndarray] = gridDimensionalComponents 
@@ -31,18 +34,19 @@ class MeshGrid:
                 setattr(self, dimension.name.lower(), self.gridDimensionalComponents[dimension.value])
         self.asArray = None
     def toArray(self) -> np.array: 
-        self.asArray = np.column_stack(np.array([
+        math = self.math
+        self.asArray = math.column_stack(math.array([
                 component.ravel() \
                 for component in self.gridDimensionalComponents
             ])).ravel()
         return self.asArray
 
-def makeLinspaceGrid(pointCount : int, length : float, dimensions : int, halfSpaced = False, componentType : type = float) -> MeshGrid: 
+def makeLinspaceGrid(pointCount : int, length : float, dimensions : int, halfSpaced = False, componentType : type = float, math = np) -> MeshGrid: 
     if halfSpaced == True: 
-        spaces : tuple[np.array] = tuple((np.linspace(-length / 2, length  / 2, pointCount, dtype = componentType) for ii in range(dimensions)))
+        spaces : tuple[np.array] = tuple((math.linspace(-length / 2, length  / 2, pointCount, dtype = componentType) for ii in range(dimensions)))
     else: 
-        spaces : tuple[np.array] = tuple((np.linspace(0, length, pointCount, dtype = componentType) for ii in range(dimensions)))
-    return MeshGrid(np.meshgrid(*spaces), pointCount, length)
+        spaces : tuple[np.array] = tuple((math.linspace(0, length, pointCount, dtype = componentType) for ii in range(dimensions)))
+    return MeshGrid(math.meshgrid(*spaces), pointCount, length, math)
 
 def applyEdge(grid : MeshGrid, value : float = 0.0) -> MeshGrid: 
     grid[0, :] = value
@@ -69,6 +73,7 @@ class SimulationProfile:
         self.spaceStep = spaceStep
         self.sparse = spsparse if gpuAccelerated == False else cpsparse
         self.math = np if gpuAccelerated == False else cp
+        self.linalg = spla if gpuAccelerated == False else cpla
 
 class SimulationResults: 
     def __init__(self, waveFunction : MeshGrid): 
@@ -79,6 +84,7 @@ def placeDiagonals(
                 inner : np.array, 
                 outer : np.array, 
                 rowLength : int, 
+                extent : int, 
                 math, 
                 sparse
             ): 
@@ -90,7 +96,7 @@ def placeDiagonals(
                     inner, 
                     outer
                 ]),
-            math.array([-rowLength, -1, 0, 1, rowLength]), 
+            math.array([-extent, -1, 0, 1, extent]), 
             rowLength, 
             rowLength
         )
@@ -108,25 +114,28 @@ def createDenseStepMatrixImplementation(
             timeStep, 
             stepConstants, 
             currentPotential, 
+            stepMatrix, 
             scalar, 
             innerDiagonal, 
             outerDiagonal
         ):
     extent = len(currentPotential)
-    stepMatrix = np.zeros((unknownFactorCount, unknownFactorCount), complex)
     rx = scalar * stepConstants[0]
     ry = scalar * stepConstants[1]
     for kk in range(unknownFactorCount): 
         ii = 1 + kk // (extent - 2)
         jj = 1 + kk % (extent - 2)
-        stepMatrix[kk, kk] = 1 + 2 * rx + 2 * ry + ((scalar * 1j * timeStep / 2) * currentPotential[ii, jj])
+        stepMatrix[kk, kk] = 1 + 2 * rx + 2 * ry \
+                + ((scalar * 1j * timeStep / 2) * currentPotential[ii, jj])
         if ii != 1: 
             stepMatrix[kk, (ii - 2) * (extent - 2) + jj - 1] = ry
         if ii != (extent - 2): 
             stepMatrix[kk, ii * (extent - 2) + jj - 1] = ry
-        if jj != 1: 
+        #if jj != 1: 
+        if kk > 0: 
             stepMatrix[kk, kk - 1] = rx
-        if jj != (extent - 2): 
+        #if jj != (extent - 2): 
+        if kk < unknownFactorCount - 1: 
             stepMatrix[kk, kk + 1] = rx
     return stepMatrix
 
@@ -137,37 +146,44 @@ def createDenseStepMatrix(
             innerDiagonal, 
             outerDiagonal
         ):
+    unknownFactorCount = simulator.unknownFactorCount
+    stepMatrix = simulator.math.zeros((unknownFactorCount, unknownFactorCount), complex)
     return createDenseStepMatrixImplementation(
-            simulator.unknownFactorCount, 
+            unknownFactorCount, 
             simulator.timeStep, 
             simulator.stepConstants, 
             currentPotential, 
+            stepMatrix, 
             scalar, 
             innerDiagonal, 
             outerDiagonal
         )
 
-def createStepMatrix(simulator, currentPotential, scalar, innerDiagonal, outerDiagonal):
+def createStepMatrix(
+            simulator, 
+            currentPotential, 
+            scalar, 
+            innerDiagonal, 
+            outerDiagonal
+        ):
     math = simulator.math
     sparse = simulator.sparse
     unknownFactorCount = simulator.unknownFactorCount
-    centerDiagonal = (1j * simulator.timeStep / 2) * currentPotential[1:-1, 1:-1].ravel()
-    centerDiagonal = 1 + math.sum(scalar * simulator.stepConstants * 2.0) + (scalar * centerDiagonal)
-    diagonalLength = len(centerDiagonal) - 2
-    #print("V:", currentPotential[1:-1, 1:-1].ravel())
-    #print("C:", centerDiagonal)
+    centerDiagonal = (scalar * 1j * simulator.timeStep / 2) * currentPotential[1:-1, 1:-1].ravel()
+    centerDiagonal = 1 + math.sum(scalar * simulator.stepConstants * 2.0) + centerDiagonal
     stepMatrix = placeDiagonals(
             centerDiagonal, 
             innerDiagonal, 
             outerDiagonal, 
             unknownFactorCount, 
+            len(currentPotential) - 2, 
             math, 
             sparse
         )
     return stepMatrix
 
 def createCurrentStepMatrix(simulator, currentPotential): 
-    return createDenseStepMatrix(
+    return createStepMatrix(
             simulator, 
             currentPotential, 
             1, 
@@ -193,37 +209,44 @@ class Simulator:
         self.spaceStep = self.profile.spaceStep
         self.math = self.profile.math
         self.sparse = self.profile.sparse
-        self.stepConstants = np.ones(self.dimensions) * (-self.timeStep / (2j * self.profile.spaceStep ** 2))
-        self.waveFunctions = [applyEdge(self.profile.initialWaveFunctionGenerator(self.grid))]
+        self.linalg = self.profile.linalg
+        self.stepConstants = self.math.ones(self.dimensions) \
+                * (-self.timeStep / (2j * self.profile.spaceStep ** 2))
+        self.waveFunctions = [
+                applyEdge(self.profile.initialWaveFunctionGenerator(self.grid))
+            ]
         self.potentials = [
                 self.profile.potentialGenerator(self.grid, 0.0), 
                 self.profile.potentialGenerator(self.grid, self.timeStep)
             ]
         self.unknownFactorCount = (self.grid.pointCount - 2) ** self.dimensions
-        self.diagonalLength = self.unknownFactorCount #(len(self.potentials[-1]) - 2) * (len(self.potentials[-1][0]) - 2)
-        self.knownInnerDiagonal = self.math.ones(self.diagonalLength) * self.stepConstants[0]
-        self.knownOuterDiagonal = self.math.ones(self.diagonalLength) * self.stepConstants[1]
+        self.diagonalLength = self.unknownFactorCount
+        self.knownInnerDiagonal = self.math.ones(self.diagonalLength) \
+                * self.stepConstants[0]
+        self.knownOuterDiagonal = self.math.ones(self.diagonalLength) \
+                * self.stepConstants[1]
         self.unknownInnerDiagonal = -1 * self.knownInnerDiagonal # These two just to save a bit of compute
         self.unknownOuterDiagonal = -1 * self.knownOuterDiagonal # time multiplying these large arrays by -1
-        #stepMatracies = computeStepMatricies(self)
 
-    def compute(self, time, maxTime, unknownStepMatrix, knownStepMatrix): 
+    def compute(self, time, unknownStepMatrix, knownStepMatrix): 
         math = self.math
         sparse = self.sparse
-        waveFunctionVector = self.waveFunctions[-1][1:-1, 1:-1].reshape((self.diagonalLength, 1))
-        #waveFunctionVector = self.waveFunctions[-1]
-        #independantTerms = knownStepMatrix * waveFunctionVector 
-        independantTerms = math.matmul(knownStepMatrix, waveFunctionVector)
-        nextWaveFunction = sparse.linalg.spsolve(sparse.csc_matrix(unknownStepMatrix), independantTerms).reshape(
-                tuple([self.grid.pointCount - 2] * self.dimensions), 
+        waveFunctionVector = self.waveFunctions[-1][1:-1, 1:-1].reshape(
+                (self.diagonalLength, 1)
             )
-        self.waveFunctions.append(np.pad(nextWaveFunction, 1))
+        independantTerms = knownStepMatrix @ waveFunctionVector 
+        #independantTerms = math.matmul(knownStepMatrix, waveFunctionVector)
+        nextWaveFunction = self.linalg.spsolve(
+                    sparse.csr_matrix(unknownStepMatrix), 
+                    independantTerms
+            ).reshape(tuple([self.grid.pointCount - 2] * self.dimensions),)
+        self.waveFunctions.append(math.pad(nextWaveFunction, 1))
         return self.waveFunctions[-1], self.potentials[-1]
 
-    def simulate(self, maxTime): 
+    def simulate(self, timePoints : int, printProgress : bool = False): 
         math = self.math
         timeStep = self.timeStep
-        timePoints = round(maxTime / timeStep)
+        #timePoints = round(maxTime / timeStep)
         time = timeStep
         for ii in range(1, timePoints): 
             self.potentials.append(
@@ -231,13 +254,16 @@ class Simulator:
                 )
             knownStepMatrix = createCurrentStepMatrix(self, self.potentials[-2])
             unknownStepMatrix = createNextStepMatrix(self, self.potentials[-1])
-            self.compute(time, maxTime, unknownStepMatrix, knownStepMatrix)
+            self.compute(time, unknownStepMatrix, knownStepMatrix)
             time = (ii + 1) * timeStep
+            if printProgress == True: 
+                print("(" + str(ii) + "/" + str(timePoints) + ")")
 
     def processProbabilities(self): 
         math = self.math
-        self.probabilities = np.array(list(map(
-                lambda waveFunction :  math.sqrt(math.real(waveFunction) ** 2 + math.imag(waveFunction) ** 2).astype(math.float64), 
+        self.probabilities = math.array(list(map(
+                lambda waveFunction :  math.sqrt(math.real(waveFunction) ** 2 \
+                        + math.imag(waveFunction) ** 2).astype(math.float64), 
                 self.waveFunctions
             )))
         self.probabilityDecibles = 0
@@ -247,11 +273,11 @@ class Simulator:
         #    )))
         return self.probabilities, self.probabilityDecibles
 
-def makeWavePacket(grid, startX, startY, sigma=0.5, k = 15 * np.pi): 
-    return np.exp((-1 / (2 * sigma ** 2)) * ((grid.x - startX) ** 2 + (grid.y - startY) ** 2)) \
-            * np.exp(-1j * k * (grid.x - startX))
+def makeWavePacket(grid, startX, startY, sigma=0.5, k = 15 * np.pi, math = np): 
+    return math.exp((-1 / (2 * sigma ** 2)) * ((grid.x - startX) ** 2 + (grid.y - startY) ** 2)) \
+            * math.exp(-1j * k * (grid.x - startX))
 
-def animateImages(pointCount : int, images : List[np.array]): 
+def animateImages(pointCount : int, images : List[np.array], interval = 1): 
     animationFigure = plt.figure()
     animationAxis = animationFigure.add_subplot(xlim=(0, pointCount), ylim=(0, pointCount))
     animationFrame = animationAxis.imshow(images[0])
@@ -259,7 +285,14 @@ def animateImages(pointCount : int, images : List[np.array]):
         animationFrame.set_data(images[frameIndex])
         animationFrame.set_zorder(1)
         return animationFrame,
-    animation = FuncAnimation(animationFigure, animateFrame, interval=1, frames=np.arange(0, len(images), 2), repeat = True, blit = 0)
+    animation = FuncAnimation(
+            animationFigure, 
+            animateFrame, 
+            interval=interval, 
+            frames=np.arange(0, len(images), 2), 
+            repeat = True, 
+            blit = 0
+        )
     return animation
 
 if __name__ == "__main__": 
