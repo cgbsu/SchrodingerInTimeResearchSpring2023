@@ -63,7 +63,8 @@ class SimulationProfile:
                 potentialGenerator, 
                 timeStep, 
                 spaceStep, 
-                gpuAccelerated = False
+                gpuAccelerated = False, 
+                edgeBound = False
             ): 
         self.grid = grid
         self.dimensions = self.grid.dimensions
@@ -74,6 +75,7 @@ class SimulationProfile:
         self.sparse = spsparse if gpuAccelerated == False else cpsparse
         self.math = np if gpuAccelerated == False else cp
         self.linalg = spla if gpuAccelerated == False else cpla
+        self.edgeBound = edgeBound
 
 class SimulationResults: 
     def __init__(self, waveFunction : MeshGrid): 
@@ -81,6 +83,7 @@ class SimulationResults:
 
 def placeDiagonals(
                 center : np.array, 
+                innerShifted : np.array, 
                 inner : np.array, 
                 outer : np.array, 
                 rowLength : int, 
@@ -89,17 +92,17 @@ def placeDiagonals(
                 sparse
             ): 
         return sparse.spdiags(
-            math.array([
-                    outer, 
-                    inner, 
-                    center, 
-                    inner, 
-                    outer
-                ]),
-            math.array([-extent, -1, 0, 1, extent]), 
-            rowLength, 
-            rowLength
-        )
+                math.array([ 
+                        outer, 
+                        inner, 
+                        center, 
+                        innerShifted, 
+                        outer
+                    ]),
+                math.array([-extent, -1, 0, 1, extent]), 
+                rowLength, 
+                rowLength
+            )
 
 def toDiagonal(vector : np.array, math, sparse): 
     return sparse.spdiags( 
@@ -109,13 +112,14 @@ def toDiagonal(vector : np.array, math, sparse):
             len(vector)
         )
 
-def createDenseStepMatrixImplementation(
+def createDenseStepMatrixImplementationBounded(
             unknownFactorCount, 
             timeStep, 
             stepConstants, 
             currentPotential, 
             stepMatrix, 
             scalar, 
+            innerDiagonalShifted, 
             innerDiagonal, 
             outerDiagonal
         ):
@@ -128,21 +132,71 @@ def createDenseStepMatrixImplementation(
         stepMatrix[kk, kk] = 1 + 2 * rx + 2 * ry \
                 + ((scalar * 1j * timeStep / 2) * currentPotential[ii, jj])
         if ii != 1: 
-            stepMatrix[kk, (ii - 2) * (extent - 2) + jj - 1] = ry
+            stepMatrix[kk, (ii - 2) * (extent - 2) + jj - 1] = outerDiagonal[kk]#ry
         if ii != (extent - 2): 
-            stepMatrix[kk, ii * (extent - 2) + jj - 1] = ry
-        #if jj != 1: 
-        if kk > 0: 
-            stepMatrix[kk, kk - 1] = rx
-        #if jj != (extent - 2): 
-        if kk < unknownFactorCount - 1: 
-            stepMatrix[kk, kk + 1] = rx
+            stepMatrix[kk, ii * (extent - 2) + jj - 1] = outerDiagonal[kk]#ry
+        if jj != 1: 
+            stepMatrix[kk, kk - 1] = innerDiagonalShifted[kk]#rx
+        if jj != (extent - 2): 
+            stepMatrix[kk, kk + 1] = innerDiagonal[kk]#rx
     return stepMatrix
+
+def createDenseStepMatrixImplementation(
+            unknownFactorCount, 
+            timeStep, 
+            stepConstants, 
+            currentPotential, 
+            stepMatrix, 
+            scalar, 
+            innerDiagonalShifted, 
+            innerDiagonal, 
+            outerDiagonal
+        ):
+    extent = len(currentPotential)
+    rx = scalar * stepConstants[0]
+    ry = scalar * stepConstants[1]
+    for kk in range(unknownFactorCount): 
+        ii = 1 + kk // (extent - 2)
+        jj = 1 + kk % (extent - 2)
+        stepMatrix[kk, kk] = 1 + 2 * rx + 2 * ry \
+                + ((scalar * 1j * timeStep / 2) * currentPotential[ii, jj])
+        if ii != 1: 
+            stepMatrix[kk, (ii - 2) * (extent - 2) + jj - 1] = outerDiagonal[kk]#ry
+        if ii != (extent - 2): 
+            stepMatrix[kk, ii * (extent - 2) + jj - 1] = outerDiagonal[kk]#ry
+        if kk > 0: 
+            stepMatrix[kk, kk - 1] = innerDiagonalShifted[kk]#rx
+        if kk < unknownFactorCount - 1: 
+            stepMatrix[kk, kk + 1] = innerDiagonal[kk]#rx
+    return stepMatrix
+
+def createDenseStepMatrixBounded(
+            simulator, 
+            currentPotential, 
+            scalar, 
+            shiftedInnerDiagonal, 
+            innerDiagonal, 
+            outerDiagonal
+        ):
+    unknownFactorCount = simulator.unknownFactorCount
+    stepMatrix = simulator.math.zeros((unknownFactorCount, unknownFactorCount), complex)
+    return createDenseStepMatrixImplementationBounded(
+            unknownFactorCount, 
+            simulator.timeStep, 
+            simulator.stepConstants, 
+            currentPotential, 
+            stepMatrix, 
+            scalar, 
+            shiftedInnerDiagonal, 
+            innerDiagonal, 
+            outerDiagonal
+        )
 
 def createDenseStepMatrix(
             simulator, 
             currentPotential, 
             scalar, 
+            shiftedInnerDiagonal, 
             innerDiagonal, 
             outerDiagonal
         ):
@@ -155,6 +209,7 @@ def createDenseStepMatrix(
             currentPotential, 
             stepMatrix, 
             scalar, 
+            shiftedInnerDiagonal, 
             innerDiagonal, 
             outerDiagonal
         )
@@ -163,6 +218,7 @@ def createStepMatrix(
             simulator, 
             currentPotential, 
             scalar, 
+            shiftedInnerDiagonal, 
             innerDiagonal, 
             outerDiagonal
         ):
@@ -173,6 +229,7 @@ def createStepMatrix(
     centerDiagonal = 1 + math.sum(scalar * simulator.stepConstants * 2.0) + centerDiagonal
     stepMatrix = placeDiagonals(
             centerDiagonal, 
+            shiftedInnerDiagonal, 
             innerDiagonal, 
             outerDiagonal, 
             unknownFactorCount, 
@@ -187,15 +244,17 @@ def createCurrentStepMatrix(simulator, currentPotential):
             simulator, 
             currentPotential, 
             1, 
+            simulator.knownInnerDiagonalShifted, 
             simulator.knownInnerDiagonal, 
             simulator.knownOuterDiagonal
         )
 
 def createNextStepMatrix(simulator, nextPotential): 
-    return createDenseStepMatrix(
+    return createStepMatrix(
             simulator, 
             nextPotential, 
             -1, 
+            simulator.unknownInnerDiagonalShifted, 
             simulator.unknownInnerDiagonal, 
             simulator.unknownOuterDiagonal
         )
@@ -213,7 +272,7 @@ class Simulator:
         self.stepConstants = self.math.ones(self.dimensions) \
                 * (-self.timeStep / (2j * self.profile.spaceStep ** 2))
         self.waveFunctions = [
-                applyEdge(self.profile.initialWaveFunctionGenerator(self.grid))
+                self.profile.initialWaveFunctionGenerator(self.grid)
             ]
         self.potentials = [
                 self.profile.potentialGenerator(self.grid, 0.0), 
@@ -223,10 +282,16 @@ class Simulator:
         self.diagonalLength = self.unknownFactorCount
         self.knownInnerDiagonal = self.math.ones(self.diagonalLength) \
                 * self.stepConstants[0]
+        if self.profile.edgeBound == True: 
+            extent = int(self.math.sqrt(self.diagonalLength))
+            self.knownInnerDiagonal.reshape((extent, extent)).T[-1] = 0
+            self.knownInnerDiagonal = self.knownInnerDiagonal.reshape(self.diagonalLength)
+        self.knownInnerDiagonalShifted = self.math.roll(self.knownInnerDiagonal, 1)
         self.knownOuterDiagonal = self.math.ones(self.diagonalLength) \
                 * self.stepConstants[1]
         self.unknownInnerDiagonal = -1 * self.knownInnerDiagonal # These two just to save a bit of compute
         self.unknownOuterDiagonal = -1 * self.knownOuterDiagonal # time multiplying these large arrays by -1
+        self.unknownInnerDiagonalShifted = -1 * self.knownInnerDiagonalShifted
 
     def compute(self, time, unknownStepMatrix, knownStepMatrix): 
         math = self.math
@@ -262,8 +327,9 @@ class Simulator:
     def processProbabilities(self): 
         math = self.math
         self.probabilities = math.array(list(map(
-                lambda waveFunction :  math.sqrt(math.real(waveFunction) ** 2 \
-                        + math.imag(waveFunction) ** 2).astype(math.float64), 
+                lambda waveFunction : math.sqrt( \
+                        math.real(waveFunction) ** 2 + math.imag(waveFunction) ** 2
+                    ).astype(math.float64), 
                 self.waveFunctions
             )))
         self.probabilityDecibles = 0
@@ -273,9 +339,11 @@ class Simulator:
         #    )))
         return self.probabilities, self.probabilityDecibles
 
-def makeWavePacket(grid, startX, startY, sigma=0.5, k = 15 * np.pi, math = np): 
-    return math.exp((-1 / (2 * sigma ** 2)) * ((grid.x - startX) ** 2 + (grid.y - startY) ** 2)) \
+def makeWavePacket(grid, startX, startY, spatialStep, sigma=0.5, k = 15 * np.pi, math = np): 
+    unnormalized = math.exp((-1 / (2 * sigma ** 2)) * ((grid.x - startX) ** 2 + (grid.y - startY) ** 2)) \
             * math.exp(-1j * k * (grid.x - startX))
+    totalProbability = math.sum(math.sqrt(math.real(unnormalized) ** 2 + math.imag(unnormalized) ** 2))
+    return unnormalized / totalProbability
 
 def animateImages(pointCount : int, images : List[np.array], interval = 1): 
     animationFigure = plt.figure()
@@ -294,6 +362,35 @@ def animateImages(pointCount : int, images : List[np.array], interval = 1):
             blit = 0
         )
     return animation
+    
+def totalProbabilityInRegion(
+            probabilityFrames : np.array, 
+            pointCount : int, 
+            spatialStep : float, 
+            x : float, 
+            y : float, 
+            width : float, 
+            height : float, 
+            math = np
+        ) -> np.array: 
+    extent = pointCount
+    normalizationValues = np.array(list(map(lambda frame : 
+            (spatialStep ** 2) * math.sum(math.sum(frame)), 
+            probabilityFrames
+        )))
+    cutFrames = np.array(list(map(lambda frame : 
+            frame[
+                    int(y * extent) : int((height + y) * extent), 
+                    int(x * extent) : int((width + x) * extent)
+                ], 
+            probabilityFrames
+        )))
+    
+    unnormalized = np.array(list(map(lambda frame : 
+            (spatialStep ** 2) * math.sum(math.sum(frame)), 
+            cutFrames
+        )))
+    return unnormalized / normalizationValues, cutFrames
 
 if __name__ == "__main__": 
     pointCount : int = 50
