@@ -8,12 +8,23 @@ import matplotlib.pyplot as plt
 from typing import List
 from typing import Tuple
 from matplotlib.animation import FuncAnimation
+from matplotlib.patches import Rectangle
 import numba
 from numba import njit
 from numba import jit
 import scipy.sparse.linalg as spla
 import cupyx.scipy.sparse.linalg as cpla
+from datetime import timedelta
+from time import monotonic
+import sys
 
+# TODO: 
+# - Figure out why potentials need to be so much higher 
+#       (are potentials "trapping" the wave function?) 
+#       than the demo this is built apon
+# - Add "delay" to potentials in time dimension
+# - Make dimensions heterogenus?
+# - Figure out best way to encode potentials
 
 class DimensionIndex(Enum):
     X = 0
@@ -64,8 +75,10 @@ class SimulationProfile:
                 timeStep, 
                 spaceStep, 
                 gpuAccelerated = False, 
-                edgeBound = False
+                edgeBound = False, 
+                useDense = False
             ): 
+        assert (gpuAccelerated == False) if useDense == True else True
         self.grid = grid
         self.dimensions = self.grid.dimensions
         self.initialWaveFunctionGenerator = initialWaveFunctionGenerator
@@ -76,6 +89,7 @@ class SimulationProfile:
         self.math = np if gpuAccelerated == False else cp
         self.linalg = spla if gpuAccelerated == False else cpla
         self.edgeBound = edgeBound
+        self.useDense = useDense
 
 class SimulationResults: 
     def __init__(self, waveFunction : MeshGrid): 
@@ -174,6 +188,7 @@ def createDenseStepMatrixBounded(
             simulator, 
             currentPotential, 
             scalar, 
+            _centerDiagonalUnused, 
             shiftedInnerDiagonal, 
             innerDiagonal, 
             outerDiagonal
@@ -196,6 +211,7 @@ def createDenseStepMatrix(
             simulator, 
             currentPotential, 
             scalar, 
+            _centerDiagonalUnused, 
             shiftedInnerDiagonal, 
             innerDiagonal, 
             outerDiagonal
@@ -218,6 +234,7 @@ def createStepMatrix(
             simulator, 
             currentPotential, 
             scalar, 
+            centerDiagonal, 
             shiftedInnerDiagonal, 
             innerDiagonal, 
             outerDiagonal
@@ -225,8 +242,9 @@ def createStepMatrix(
     math = simulator.math
     sparse = simulator.sparse
     unknownFactorCount = simulator.unknownFactorCount
-    centerDiagonal = (scalar * 1j * simulator.timeStep / 2) * currentPotential[1:-1, 1:-1].ravel()
-    centerDiagonal = 1 + math.sum(scalar * simulator.stepConstants * 2.0) + centerDiagonal
+    centerDiagonal = centerDiagonal[0] \
+                + (scalar * 1j * simulator.timeStep / 2) \
+                * currentPotential[1:-1, 1:-1].ravel()
     stepMatrix = placeDiagonals(
             centerDiagonal, 
             shiftedInnerDiagonal, 
@@ -239,25 +257,6 @@ def createStepMatrix(
         )
     return stepMatrix
 
-def createCurrentStepMatrix(simulator, currentPotential): 
-    return createStepMatrix(
-            simulator, 
-            currentPotential, 
-            1, 
-            simulator.knownInnerDiagonalShifted, 
-            simulator.knownInnerDiagonal, 
-            simulator.knownOuterDiagonal
-        )
-
-def createNextStepMatrix(simulator, nextPotential): 
-    return createStepMatrix(
-            simulator, 
-            nextPotential, 
-            -1, 
-            simulator.unknownInnerDiagonalShifted, 
-            simulator.unknownInnerDiagonal, 
-            simulator.unknownOuterDiagonal
-        )
 
 class Simulator: 
     def __init__(self, profile : SimulationProfile): 
@@ -274,24 +273,50 @@ class Simulator:
         self.waveFunctions = [
                 self.profile.initialWaveFunctionGenerator(self.grid)
             ]
-        self.potentials = [
-                self.profile.potentialGenerator(self.grid, 0.0), 
-                self.profile.potentialGenerator(self.grid, self.timeStep)
-            ]
         self.unknownFactorCount = (self.grid.pointCount - 2) ** self.dimensions
         self.diagonalLength = self.unknownFactorCount
-        self.knownInnerDiagonal = self.math.ones(self.diagonalLength) \
+        self.knownInnerDiagonal = -1 * self.math.ones(self.diagonalLength) \
                 * self.stepConstants[0]
         if self.profile.edgeBound == True: 
             extent = int(self.math.sqrt(self.diagonalLength))
             self.knownInnerDiagonal.reshape((extent, extent)).T[-1] = 0
             self.knownInnerDiagonal = self.knownInnerDiagonal.reshape(self.diagonalLength)
         self.knownInnerDiagonalShifted = self.math.roll(self.knownInnerDiagonal, 1)
-        self.knownOuterDiagonal = self.math.ones(self.diagonalLength) \
+        self.knownOuterDiagonal = -1 * self.math.ones(self.diagonalLength) \
                 * self.stepConstants[1]
         self.unknownInnerDiagonal = -1 * self.knownInnerDiagonal # These two just to save a bit of compute
         self.unknownOuterDiagonal = -1 * self.knownOuterDiagonal # time multiplying these large arrays by -1
         self.unknownInnerDiagonalShifted = -1 * self.knownInnerDiagonalShifted
+        self.knownCenterDiagonal = self.math.ones(self.diagonalLength) \
+                * (1 + self.math.sum(self.stepConstants * 2.0))
+        self.unknownCenterDiagonal = self.math.ones(self.diagonalLength) \
+                * (1 + self.math.sum(-self.stepConstants * 2.0))
+        self.createStepMatrix = (
+                        createDenseStepMatrixBounded \
+                        if self.profile.edgeBound == True else createDenseStepMatrix
+                ) if self.profile.useDense == True else createStepMatrix
+
+    def createCurrentStepMatrix(self, currentPotential): 
+        return self.createStepMatrix(
+                self, 
+                currentPotential, 
+                1, 
+                self.knownCenterDiagonal, 
+                self.knownInnerDiagonalShifted, 
+                self.knownInnerDiagonal, 
+                self.knownOuterDiagonal
+            )
+    
+    def createNextStepMatrix(self, nextPotential): 
+        return self.createStepMatrix(
+                self, 
+                nextPotential, 
+                -1, 
+                self.unknownCenterDiagonal, 
+                self.unknownInnerDiagonalShifted, 
+                self.unknownInnerDiagonal, 
+                self.unknownOuterDiagonal
+            )
 
     def compute(self, time, unknownStepMatrix, knownStepMatrix): 
         math = self.math
@@ -308,21 +333,67 @@ class Simulator:
         self.waveFunctions.append(math.pad(nextWaveFunction, 1))
         return self.waveFunctions[-1], self.potentials[-1]
 
-    def simulate(self, timePoints : int, printProgress : bool = False): 
+    def simulateTime(self, maxTime : int, printProgress : bool = False): 
         math = self.math
         timeStep = self.timeStep
-        #timePoints = round(maxTime / timeStep)
-        time = timeStep
+        timePoints = round(maxTime / timeStep)
+        return self.simulate(timePoints, printProgress)
+
+    def simulate(self, timePoints : int, printProgress : bool = False, showTotalTime = False, showStepTime = False, detailedProgress = False): 
+        math = self.math
+        timeStep = self.timeStep
+        time : float = timeStep
+        maxTime : float = timePoints * timeStep
+        self.potentials = [
+                self.profile.potentialGenerator(self.grid, 0.0), 
+                self.profile.potentialGenerator(self.grid, self.timeStep)
+            ]
+        performenceStartTime = monotonic()
+        performenceAverageStepTime = 1
+        progressBarLength = 100
+        deltaProgress = 1
+        lastProgressLength = 0
+        messageLength = 1
+        progressOffset : int = timePoints % progressBarLength
+        if printProgress == True: 
+            sys.stdout.write("[]")
         for ii in range(1, timePoints): 
+            previousPerformenceTime = monotonic()
             self.potentials.append(
                     self.profile.potentialGenerator(self.grid, (ii + 1) * self.timeStep)
                 )
-            knownStepMatrix = createCurrentStepMatrix(self, self.potentials[-2])
-            unknownStepMatrix = createNextStepMatrix(self, self.potentials[-1])
+            knownStepMatrix = self.createCurrentStepMatrix(self.potentials[-2])
+            unknownStepMatrix = self.createNextStepMatrix(self.potentials[-1])
             self.compute(time, unknownStepMatrix, knownStepMatrix)
             time = (ii + 1) * timeStep
+            progress = round((ii / timePoints) * progressBarLength)
             if printProgress == True: 
-                print("(" + str(ii) + "/" + str(timePoints) + ")")
+                update = ((progress - lastProgressLength) // deltaProgress)
+                if detailedProgress == True: 
+                    percent = " " + "{0:.3g}".format((ii / timePoints) * 100) + "%"
+                    frames = " (" + str(ii) + "/" + str(timePoints) + ")"
+                    performence = " {0:.3g} fps".format(1 / performenceAverageStepTime)
+                    remainingTime = ", est. {0:.3g}s remain".format((timePoints - ii) / (1 / performenceAverageStepTime))
+                    message = frames + percent + performence + remainingTime + "]"
+                    for jj in range(messageLength): 
+                        sys.stdout.write("\b")
+                        sys.stdout.flush()
+                #if (progress - lastProgressLength) > deltaProgress: 
+                sys.stdout.write("-" * update)
+                if detailedProgress == True: 
+                    sys.stdout.write(message)
+                    messageLength = len(message)
+                sys.stdout.flush()
+                lastProgressLength += update
+            performenceAverageStepTime = (performenceAverageStepTime \
+                    + (monotonic() - previousPerformenceTime)) / 2.0
+        if printProgress == True: 
+            sys.stdout.write("]\n")
+            sys.stdout.flush()
+        if showTotalTime == True: 
+            print("Total Time: ", monotonic() - performenceStartTime)
+        if showStepTime == True: 
+            print("Step Time: ", 1 / performenceAverageStepTime)
 
     def processProbabilities(self): 
         math = self.math
@@ -339,16 +410,69 @@ class Simulator:
         #    )))
         return self.probabilities, self.probabilityDecibles
 
-def makeWavePacket(grid, startX, startY, spatialStep, sigma=0.5, k = 15 * np.pi, math = np): 
-    unnormalized = math.exp((-1 / (2 * sigma ** 2)) * ((grid.x - startX) ** 2 + (grid.y - startY) ** 2)) \
-            * math.exp(-1j * k * (grid.x - startX))
-    totalProbability = math.sum(math.sqrt(math.real(unnormalized) ** 2 + math.imag(unnormalized) ** 2))
-    return unnormalized / totalProbability
+def makeWavePacket(grid, startX, startY, spatialStep, sigma = 0.5, k = 15 * np.pi, math = np): 
+    #unnormalized = math.exp((-1 / (2 * sigma ** 2)) * ((grid.x - startX) ** 2 + (grid.y - startY) ** 2)) \
+            #* math.exp(-1j * k * (grid.x - startX))
+    #totalProbability = math.sum(math.sqrt(math.real(unnormalized) ** 2 + math.imag(unnormalized) ** 2))
+    #return unnormalized / totalProbability
+    unnormalized = math.exp(-1 / 2 * ((grid.x - startX) ** 2 + (grid.y - startY) ** 2) / sigma ** 2) \
+            * math.exp(1j * k * (grid.x - startX))
+    return unnormalized
 
-def animateImages(pointCount : int, images : List[np.array], interval = 1): 
+def constantPotentialRectangles(
+            axis, 
+            pointCount : int, 
+            lengthRatios : List[float], 
+            potentialRatios : List[float], 
+            baseAlpha : float = .08, 
+            color : str = "w", 
+            zorder : int = 50
+        ): 
+    displayRectangles = []
+    currentPosition = 0
+    for ii in range(len(lengthRatios)): 
+        xExtent = pointCount * lengthRatios[ii]
+        displayRectangles.append(Rectangle(
+                (currentPosition, 0), 
+                xExtent, 
+                pointCount, 
+                color = color, 
+                zorder = zorder, 
+                alpha = potentialRatios[ii] * baseAlpha
+            ))
+        axis.add_patch(displayRectangles[-1])
+        currentPosition += xExtent
+    return displayRectangles
+
+def animateImages(
+            length : float, 
+            images : List[np.array], 
+            interval = 1, 
+            minimumValue = None, 
+            maximumValue = None, 
+            lengthRatios = None, 
+            potentialRatios = None, 
+            baseAlpha : float = .08, 
+            colorMap : str = "viridis"
+        ): 
     animationFigure = plt.figure()
-    animationAxis = animationFigure.add_subplot(xlim=(0, pointCount), ylim=(0, pointCount))
-    animationFrame = animationAxis.imshow(images[0])
+    animationAxis = animationFigure.add_subplot(xlim=(0, length), ylim=(0, length))
+    animationFrame = animationAxis.imshow(
+            images[0], 
+            extent=[0, length, 0, length], 
+            vmin = minimumValue, 
+            vmax = maximumValue, 
+            zorder = 1, 
+            cmap = colorMap
+        )
+    if lengthRatios and potentialRatios: 
+        constantPotentialRectangles(
+                animationAxis, 
+                length, 
+                lengthRatios, 
+                potentialRatios, 
+                baseAlpha = baseAlpha
+            )
     def animateFrame(frameIndex): 
         animationFrame.set_data(images[frameIndex])
         animationFrame.set_zorder(1)
@@ -356,14 +480,14 @@ def animateImages(pointCount : int, images : List[np.array], interval = 1):
     animation = FuncAnimation(
             animationFigure, 
             animateFrame, 
-            interval=interval, 
-            frames=np.arange(0, len(images), 2), 
+            interval = interval, 
+            frames = np.arange(0, len(images), 2), 
             repeat = True, 
             blit = 0
         )
     return animation
-    
-def totalProbabilityInRegion(
+
+def totalProbabilityInRegion( # TODO: Find an AVERAGE normalization value to use for the whole thing, then use that.
             probabilityFrames : np.array, 
             pointCount : int, 
             spatialStep : float, 
@@ -374,11 +498,11 @@ def totalProbabilityInRegion(
             math = np
         ) -> np.array: 
     extent = pointCount
-    normalizationValues = np.array(list(map(lambda frame : 
+    normalizationValues = math.array(list(map(lambda frame : 
             (spatialStep ** 2) * math.sum(math.sum(frame)), 
             probabilityFrames
         )))
-    cutFrames = np.array(list(map(lambda frame : 
+    cutFrames = math.array(list(map(lambda frame : 
             frame[
                     int(y * extent) : int((height + y) * extent), 
                     int(x * extent) : int((width + x) * extent)
@@ -386,25 +510,9 @@ def totalProbabilityInRegion(
             probabilityFrames
         )))
     
-    unnormalized = np.array(list(map(lambda frame : 
+    unnormalized = math.array(list(map(lambda frame : 
             (spatialStep ** 2) * math.sum(math.sum(frame)), 
             cutFrames
         )))
     return unnormalized / normalizationValues, cutFrames
-
-if __name__ == "__main__": 
-    pointCount : int = 50
-    profile = SimulationProfile(
-            makeLinspaceGrid(pointCount, 1, 2), 
-            makeWavePacket, 
-            lambda position, time : np.sqrt(position.x ** 2 + position.y ** 2), 
-            .01, 
-            .01
-        )
-    simulator = Simulator(profile)
-    simulator.simulate(1)
-    probabilities, probabilityDecibles = simulator.processProbabilities()
-    print(simulator.waveFunctions[-1])
-    #plt.imshow(simulator.waveFunctions[-1])
-    plt.imshow(simulator.probabilities[-1])
 
