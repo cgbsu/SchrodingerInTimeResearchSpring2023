@@ -76,9 +76,15 @@ class SimulationProfile:
                 spaceStep, 
                 gpuAccelerated = False, 
                 edgeBound = False, 
-                useDense = False
+                useDense = False, 
+                constantPotential = False, 
+                courantNumber = 1.0, 
+                courantWarning = True, 
+                length = None
             ): 
         assert (gpuAccelerated == False) if useDense == True else True
+        assert (timeStep / spaceStep) <= courantNumber if courantWarning == True else True, \
+                "Courant condition not satisfied! timeStep / spaceStep greater than Courant Number (usually 1)"
         self.grid = grid
         self.dimensions = self.grid.dimensions
         self.initialWaveFunctionGenerator = initialWaveFunctionGenerator
@@ -90,6 +96,8 @@ class SimulationProfile:
         self.linalg = spla if gpuAccelerated == False else cpla
         self.edgeBound = edgeBound
         self.useDense = useDense
+        self.constantPotential = constantPotential 
+        self.length = length
 
 class SimulationResults: 
     def __init__(self, waveFunction : MeshGrid): 
@@ -339,15 +347,25 @@ class Simulator:
         timePoints = round(maxTime / timeStep)
         return self.simulate(timePoints, printProgress)
 
-    def simulate(self, timePoints : int, printProgress : bool = False, showTotalTime = False, showStepTime = False, detailedProgress = False): 
+    def simulate(
+                self, timePoints : int, 
+                printProgress : bool = False, 
+                showTotalTime = False, 
+                showStepTime = False, 
+                detailedProgress = False
+            ): 
         math = self.math
         timeStep = self.timeStep
         time : float = timeStep
         maxTime : float = timePoints * timeStep
-        self.potentials = [
-                self.profile.potentialGenerator(self.grid, 0.0), 
-                self.profile.potentialGenerator(self.grid, self.timeStep)
-            ]
+        initialPotential = self.profile.potentialGenerator(self.grid, 0.0)
+        if self.profile.constantPotential == True: 
+            self.potentials = [initialPotential, initialPotential]
+        else: 
+            self.potentials = [
+                    self.profile.potentialGenerator(self.grid, 0.0), 
+                    self.profile.potentialGenerator(self.grid, self.timeStep)
+                ]
         performenceStartTime = monotonic()
         performenceAverageStepTime = 1
         progressBarLength = 100
@@ -356,12 +374,17 @@ class Simulator:
         messageLength = 1
         progressOffset : int = timePoints % progressBarLength
         if printProgress == True: 
-            sys.stdout.write("[]")
+            if detailedProgress == False: 
+                sys.stdout.write("[" + ("=" * progressBarLength) + "]\n")
+            sys.stdout.write("[")
+            if detailedProgress == True: 
+                sys.stdout.write("]")
         for ii in range(1, timePoints): 
             previousPerformenceTime = monotonic()
-            self.potentials.append(
-                    self.profile.potentialGenerator(self.grid, (ii + 1) * self.timeStep)
-                )
+            if self.profile.constantPotential == False: 
+                self.potentials.append(
+                        self.profile.potentialGenerator(self.grid, (ii + 1) * self.timeStep)
+                    )
             knownStepMatrix = self.createCurrentStepMatrix(self.potentials[-2])
             unknownStepMatrix = self.createNextStepMatrix(self.potentials[-1])
             self.compute(time, unknownStepMatrix, knownStepMatrix)
@@ -393,7 +416,7 @@ class Simulator:
         if showTotalTime == True: 
             print("Total Time: ", monotonic() - performenceStartTime)
         if showStepTime == True: 
-            print("Step Time: ", 1 / performenceAverageStepTime)
+            print("Frames Per Second: ", 1 / performenceAverageStepTime)
 
     def processProbabilities(self): 
         math = self.math
