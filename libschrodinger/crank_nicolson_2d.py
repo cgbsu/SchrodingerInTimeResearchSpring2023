@@ -66,6 +66,59 @@ def applyEdge(grid : MeshGrid, value : float = 0.0) -> MeshGrid:
     grid[:, -1] = value
     return grid
 
+def printWithProgressBar(
+            step, 
+            timePoints : int, 
+            progressBarLength : int = 100, 
+            printProgress : bool = False, 
+            showTotalTime : bool = False, 
+            showStepTime : bool = False, 
+            detailedProgress : bool = False
+        ): 
+    performenceStartTime = monotonic()
+    performenceAverageStepTime = 1
+    deltaProgress = 1
+    lastProgressLength = 0
+    messageLength = 1
+    progressOffset : int = timePoints % progressBarLength
+    if printProgress == True: 
+        if detailedProgress == False: 
+            sys.stdout.write("[" + ("=" * progressBarLength) + "]\n")
+        sys.stdout.write("[")
+        if detailedProgress == True: 
+            sys.stdout.write("]")
+    for ii in range(1, timePoints): 
+        previousPerformenceTime = monotonic()
+        step(ii)
+        progress = round((ii / timePoints) * progressBarLength)
+        if printProgress == True: 
+            update = ((progress - lastProgressLength) // deltaProgress)
+            if detailedProgress == True: 
+                percent = " " + "{0:.3g}".format((ii / timePoints) * 100) + "%"
+                frames = " (" + str(ii) + "/" + str(timePoints) + ")"
+                performence = " {0:.3g} fps".format(1 / performenceAverageStepTime)
+                remainingTime = ", est. {0:.3g}s remain".format((timePoints - ii) / (1 / performenceAverageStepTime))
+                message = frames + percent + performence + remainingTime + "]"
+                for jj in range(messageLength): 
+                    sys.stdout.write("\b")
+                    sys.stdout.flush()
+            #if (progress - lastProgressLength) > deltaProgress: 
+            sys.stdout.write("-" * update)
+            if detailedProgress == True: 
+                sys.stdout.write(message)
+                messageLength = len(message)
+            sys.stdout.flush()
+            lastProgressLength += update
+        performenceAverageStepTime = (performenceAverageStepTime \
+                + (monotonic() - previousPerformenceTime)) / 2.0
+    if printProgress == True: 
+        sys.stdout.write("]\n")
+        sys.stdout.flush()
+    if showTotalTime == True: 
+        print("Total Time: ", monotonic() - performenceStartTime)
+    if showStepTime == True: 
+        print("Frames Per Second: ", 1 / performenceAverageStepTime)
+
 class SimulationProfile: 
     def __init__(
                 self, 
@@ -326,7 +379,7 @@ class Simulator:
                 self.unknownOuterDiagonal
             )
 
-    def compute(self, time, unknownStepMatrix, knownStepMatrix): 
+    def compute(self, unknownStepMatrix, knownStepMatrix): 
         math = self.math
         sparse = self.sparse
         waveFunctionVector = self.waveFunctions[-1][1:-1, 1:-1].reshape(
@@ -347,17 +400,18 @@ class Simulator:
         timePoints = round(maxTime / timeStep)
         return self.simulate(timePoints, printProgress)
 
+
     def simulate(
-                self, timePoints : int, 
+                self, 
+                timePoints : int, 
                 printProgress : bool = False, 
                 showTotalTime = False, 
                 showStepTime = False, 
-                detailedProgress = False
+                detailedProgress = False, 
+                progressBarLength : int = 100
             ): 
         math = self.math
-        timeStep = self.timeStep
-        time : float = timeStep
-        maxTime : float = timePoints * timeStep
+        #currentTime : float = timeStep
         initialPotential = self.profile.potentialGenerator(self.grid, 0.0)
         if self.profile.constantPotential == True: 
             self.potentials = [initialPotential, initialPotential]
@@ -366,57 +420,24 @@ class Simulator:
                     self.profile.potentialGenerator(self.grid, 0.0), 
                     self.profile.potentialGenerator(self.grid, self.timeStep)
                 ]
-        performenceStartTime = monotonic()
-        performenceAverageStepTime = 1
-        progressBarLength = 100
-        deltaProgress = 1
-        lastProgressLength = 0
-        messageLength = 1
-        progressOffset : int = timePoints % progressBarLength
-        if printProgress == True: 
-            if detailedProgress == False: 
-                sys.stdout.write("[" + ("=" * progressBarLength) + "]\n")
-            sys.stdout.write("[")
-            if detailedProgress == True: 
-                sys.stdout.write("]")
-        for ii in range(1, timePoints): 
-            previousPerformenceTime = monotonic()
+        def step(stepIndex : int): 
             if self.profile.constantPotential == False: 
                 self.potentials.append(
-                        self.profile.potentialGenerator(self.grid, (ii + 1) * self.timeStep)
+                        self.profile.potentialGenerator(self.grid, (timeIndex + 1) * self.timeStep)
                     )
             knownStepMatrix = self.createCurrentStepMatrix(self.potentials[-2])
             unknownStepMatrix = self.createNextStepMatrix(self.potentials[-1])
-            self.compute(time, unknownStepMatrix, knownStepMatrix)
-            time = (ii + 1) * timeStep
-            progress = round((ii / timePoints) * progressBarLength)
-            if printProgress == True: 
-                update = ((progress - lastProgressLength) // deltaProgress)
-                if detailedProgress == True: 
-                    percent = " " + "{0:.3g}".format((ii / timePoints) * 100) + "%"
-                    frames = " (" + str(ii) + "/" + str(timePoints) + ")"
-                    performence = " {0:.3g} fps".format(1 / performenceAverageStepTime)
-                    remainingTime = ", est. {0:.3g}s remain".format((timePoints - ii) / (1 / performenceAverageStepTime))
-                    message = frames + percent + performence + remainingTime + "]"
-                    for jj in range(messageLength): 
-                        sys.stdout.write("\b")
-                        sys.stdout.flush()
-                #if (progress - lastProgressLength) > deltaProgress: 
-                sys.stdout.write("-" * update)
-                if detailedProgress == True: 
-                    sys.stdout.write(message)
-                    messageLength = len(message)
-                sys.stdout.flush()
-                lastProgressLength += update
-            performenceAverageStepTime = (performenceAverageStepTime \
-                    + (monotonic() - previousPerformenceTime)) / 2.0
-        if printProgress == True: 
-            sys.stdout.write("]\n")
-            sys.stdout.flush()
-        if showTotalTime == True: 
-            print("Total Time: ", monotonic() - performenceStartTime)
-        if showStepTime == True: 
-            print("Frames Per Second: ", 1 / performenceAverageStepTime)
+            self.compute(unknownStepMatrix, knownStepMatrix)
+
+        printWithProgressBar(
+                step, 
+                timePoints, 
+                progressBarLength, 
+                printProgress, 
+                showTotalTime, 
+                showStepTime, 
+                detailedProgress
+            )
 
     def processProbabilities(self): 
         math = self.math
