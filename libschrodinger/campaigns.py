@@ -54,7 +54,8 @@ def logConstantMeasurementRegionSimulation(
             showWhenSimulationDone : bool = False, 
             math = np, 
             basePath = None, 
-            animationInterval = 30
+            animationInterval : int = 30, 
+            colorMap : str = "hot"
         ):
     basePath = basePath if basePath else Path.cwd() / baseName
     if showWhenSimulationDone == True: 
@@ -81,7 +82,7 @@ def logConstantMeasurementRegionSimulation(
             math.max(simulator.probabilities), 
             constantRegionLengths, 
             [1] * len(constantRegionLengths), 
-            colorMap = "hot"
+            colorMap = colorMap
         )
     waveAnimation.save(str(videoPath / (str(simulationCount) + ".gif")))
     plt.close()
