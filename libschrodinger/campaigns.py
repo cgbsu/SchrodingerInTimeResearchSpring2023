@@ -1,19 +1,17 @@
-from libschrodinger.crank_nicolson_2d import Simulator, SimulationProfile, makeLinspaceGrid, totalProbabilityInRegion, animateImages, asNumPyArray
-from libschrodinger.potentials import constantPotentials
-import numpy as np
-from typing import Tuple, List, Dict
+from libschrodinger import *
 from functools import partial
 from pathlib import Path
 from matplotlib import pyplot as plt
 import pandas as pd
+from libschrodinger.utility import *
 
 def recordTotalLengthWiseProbabilities(
             simulator : Simulator, 
             regionLengths : List[float], 
             regionLabels : Tuple[str], 
-            math = np, 
             regionLabelPrepend = "TotalProbability::"
         ) -> pd.DataFrame:
+    math = simulator.profile.math
     assert len(regionLabels) == len(regionLengths)
     currentPosition : float = 0
     regionalProbabilities : List[np.array] = []
@@ -50,11 +48,11 @@ def logConstantMeasurementRegionSimulation(
             constantRegionLengths : List[float], 
             constantRegionLabels : List[str], 
             showWhenSimulationDone : bool = False, 
-            math = np, 
             basePath = None, 
             animationInterval : int = 30, 
             colorMap : str = "hot"
         ):
+    math = simulator.profile.math
     basePath = basePath if basePath else Path.cwd() / baseName
     if showWhenSimulationDone == True: 
         print("Simulation " + str(simulationCount) + ": done processing probabilities.")
@@ -69,7 +67,6 @@ def logConstantMeasurementRegionSimulation(
             simulator, 
             constantRegionLengths, 
             constantRegionLabels, 
-            math, 
             name
         )
     waveAnimation = animateImages(
@@ -123,15 +120,17 @@ def constantSimulationProfiles(
             potentialHeight : float, 
             pointCount : int, 
             simulateControl : bool, 
-            math = np, 
             gpuAccelerated = False, 
             edgeBound = False, 
             useDense = False, 
             courantNumber = 1.0, 
-            logFunction = None
+            logFunction = None, 
+            fineGrainedLog : bool = False, 
+            defaultMatrixSolveMethod : MatrixSolverFunctionType = solveMatrixStandard
         ) -> List[SimulationProfile]:
     if simulateControl == True: 
         regionPotentialRatios.append([0.0 for ii in range(len(regionPotentialRatios[0]))])
+    math = ComputationalProfile(gpuAccelerated).math
     profiles : List[SimulationProfile] = []
     potentialFunction = lambda potentialRatios, position, time : constantPotentials(
                 position, 
@@ -153,7 +152,9 @@ def constantSimulationProfiles(
             useDense = useDense, 
             courantNumber = courantNumber, 
             length = length, 
-            logFunction = logFunction
+            logFunction = logFunction, 
+            fineGrainedLog = fineGrainedLog, 
+            defaultMatrixSolveMethod = defaultMatrixSolveMethod 
         )
         profiles.append(profile)
     return profiles
@@ -170,8 +171,7 @@ def recordConstantRegionSimulations(
             animationInterval = 30, 
             showBar : bool = False, 
             showFPS : bool = False, 
-            showTotalTime : bool = False, 
-            math = np
+            showTotalTime : bool = False
         ):
     simulations : List[Simulator] = []
     simulationCount : int = 0
@@ -198,7 +198,6 @@ def recordConstantRegionSimulations(
                 measurmentRegions, 
                 constantRegionLabels, 
                 showWhenSimulationDone, 
-                math, 
                 basePath, 
                 animationInterval
             )
