@@ -1,9 +1,7 @@
-from libschrodinger.crank_nicolson_2d import Simulator, SimulationProfile, makeLinspaceGrid, totalProbabilityInRegion, animateImages
+from libschrodinger.crank_nicolson_2d import Simulator, SimulationProfile, makeLinspaceGrid, totalProbabilityInRegion, animateImages, asNumPyArray
 from libschrodinger.potentials import constantPotentials
 import numpy as np
-from typing import Tuple
-from typing import List
-from typing import Dict
+from typing import Tuple, List, Dict
 from functools import partial
 from pathlib import Path
 from matplotlib import pyplot as plt
@@ -87,7 +85,7 @@ def logConstantMeasurementRegionSimulation(
     waveAnimation.save(str(videoPath / (str(simulationCount) + ".gif")))
     plt.close()
     plt.figure()
-    plt.imshow(simulator.potentials[0])
+    plt.imshow(asNumPyArray(simulator.potentials[0]))
     plt.savefig(str(videoPath / (str(simulationCount) + "Potential.png")))
     plt.close()
     totalProbabilities[name + "FrameCount"] = frameCount
@@ -103,7 +101,7 @@ def logConstantMeasurementRegionSimulation(
                 animationInterval, 
                 0, 
                 math.max(cutFrames[ii]), 
-                colorMap = "hot"
+                colorMap = colorMap
             )
         cutAnimation.save(str(videoPath / (constantRegionLabels[ii] + ".gif")))
         plt.close()
@@ -130,6 +128,7 @@ def constantSimulationProfiles(
             edgeBound = False, 
             useDense = False, 
             courantNumber = 1.0, 
+            logFunction = None
         ) -> List[SimulationProfile]:
     if simulateControl == True: 
         regionPotentialRatios.append([0.0 for ii in range(len(regionPotentialRatios[0]))])
@@ -153,7 +152,8 @@ def constantSimulationProfiles(
             edgeBound = edgeBound, 
             useDense = useDense, 
             courantNumber = courantNumber, 
-            length = length
+            length = length, 
+            logFunction = logFunction
         )
         profiles.append(profile)
     return profiles
@@ -179,9 +179,10 @@ def recordConstantRegionSimulations(
     constantRegionLabels \
             = ["Region" + str(ii) for ii in range(len(constantRegionLabels))] \
             if constantRegionLabels == None else constantRegionLabels 
+    logs = []
     for profile in profiles: 
         simulator = Simulator(profile)
-        simulator.simulate(frames, showBar, showFPS, showTotalTime)
+        logs.append(simulator.simulate(frames, showBar, showFPS, showTotalTime))
         if showWhenSimulationDone == True: 
             print("Simulation " + str(simulationCount) + " is done, processing probabilities.")
         probabilities, probabilityDecibles = simulator.processProbabilities()
@@ -202,5 +203,5 @@ def recordConstantRegionSimulations(
                 animationInterval
             )
         simulationCount += 1
-    return allData, simulations
+    return allData, simulations, logs
 

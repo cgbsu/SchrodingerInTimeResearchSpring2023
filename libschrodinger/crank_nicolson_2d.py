@@ -5,13 +5,11 @@ import scipy.sparse as spsparse
 import cupy as cp
 import cupyx.scipy.sparse as cpsparse
 import matplotlib.pyplot as plt
-from typing import List
-from typing import Tuple
+from typing import Tuple, List, Dict
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Rectangle
 import numba
-from numba import njit
-from numba import jit
+from numba import njit, jit
 import scipy.sparse.linalg as spla
 import cupyx.scipy.sparse.linalg as cpla
 from datetime import timedelta
@@ -66,6 +64,10 @@ def applyEdge(grid : MeshGrid, value : float = 0.0) -> MeshGrid:
     grid[:, -1] = value
     return grid
 
+def asNumPyArray(array) -> np.array: 
+    isCuPyArray = (type(array) is cp.ndarray) or (type(array) is cp.array)
+    return array.get() if isCuPyArray else array
+
 def printWithProgressBar(
             step, 
             timePoints : int, 
@@ -119,6 +121,11 @@ def printWithProgressBar(
     if showStepTime == True: 
         print("Frames Per Second: ", 1 / performenceAverageStepTime)
 
+def performenceLog(log : Dict[str, List[float]], stepLabel : str): 
+    if stepLabel not in log: 
+        log[stepLabel] = []
+    log[stepLabel].append(monotonic())
+
 class SimulationProfile: 
     def __init__(
                 self, 
@@ -133,7 +140,8 @@ class SimulationProfile:
                 constantPotential = False, 
                 courantNumber = 1.0, 
                 courantWarning = True, 
-                length = None
+                length = None, 
+                logFunction = lambda log, stepLabel : None
             ): 
         assert (gpuAccelerated == False) if useDense == True else True
         assert (timeStep / spaceStep) <= courantNumber if courantWarning == True else True, \
@@ -151,6 +159,7 @@ class SimulationProfile:
         self.useDense = useDense
         self.constantPotential = constantPotential 
         self.length = length
+        self.logFunction = logFunction
 
 class SimulationResults: 
     def __init__(self, waveFunction : MeshGrid): 
@@ -379,19 +388,31 @@ class Simulator:
                 self.unknownOuterDiagonal
             )
 
-    def compute(self, unknownStepMatrix, knownStepMatrix): 
+    def compute(self, unknownStepMatrix, knownStepMatrix, log, logFunction): 
         math = self.math
         sparse = self.sparse
+        logFunction(log, "Started \"Compute\"")
         waveFunctionVector = self.waveFunctions[-1][1:-1, 1:-1].reshape(
                 (self.diagonalLength, 1)
             )
+        logFunction(log, "Reshaped Wave Function")
         independantTerms = knownStepMatrix @ waveFunctionVector 
+        logFunction(log, "Matrix Multiplication")
         #independantTerms = math.matmul(knownStepMatrix, waveFunctionVector)
-        nextWaveFunction = self.linalg.spsolve(
-                    sparse.csr_matrix(unknownStepMatrix), 
-                    independantTerms
-            ).reshape(tuple([self.grid.pointCount - 2] * self.dimensions),)
+        #csrUnknownStepMatrix = sparse.csr_matrix(unknownStepMatrix)
+        logFunction(log, "Fine Grain: sparse.csr_matrix")
+        nextWaveFunction = self.linalg.cg(
+                    unknownStepMatrix, 
+                    independantTerms, 
+                    x0 = None, 
+                    tol = 1e-5#min(self.spaceStep, self.timeStep) ** 2
+            )[0]
+        logFunction(log, "Fine Grain: Solve for nextWaveFunction")
+        nextWaveFunction = nextWaveFunction.reshape(tuple([self.grid.pointCount - 2] * self.dimensions),)
+        logFunction(log, "Fine Grain: Reshape nextWaveFunction")
+        logFunction(log, "Solved For Independant Terms and Reshaped")
         self.waveFunctions.append(math.pad(nextWaveFunction, 1))
+        logFunction(log, "Appended Wave Function and Finished \"Compute\"")
         return self.waveFunctions[-1], self.potentials[-1]
 
     def simulateTime(self, maxTime : int, printProgress : bool = False): 
@@ -400,7 +421,6 @@ class Simulator:
         timePoints = round(maxTime / timeStep)
         return self.simulate(timePoints, printProgress)
 
-
     def simulate(
                 self, 
                 timePoints : int, 
@@ -408,11 +428,17 @@ class Simulator:
                 showTotalTime = False, 
                 showStepTime = False, 
                 detailedProgress = False, 
-                progressBarLength : int = 100
+                progressBarLength : int = 100, 
+                log = None, 
+                logFunction = None
             ): 
         math = self.math
+        logFunction = logFunction if logFunction else self.profile.logFunction
+        log = log if log else {}
         #currentTime : float = timeStep
+        logFunction(log, "Started Simulation")
         initialPotential = self.profile.potentialGenerator(self.grid, 0.0)
+        logFunction(log, "Generated Initial Potential")
         if self.profile.constantPotential == True: 
             self.potentials = [initialPotential, initialPotential]
         else: 
@@ -420,14 +446,20 @@ class Simulator:
                     self.profile.potentialGenerator(self.grid, 0.0), 
                     self.profile.potentialGenerator(self.grid, self.timeStep)
                 ]
+        logFunction(log, "Generated Next Initial Potential")
         def step(stepIndex : int): 
+            logFunction(log, "Starting \"Step\"")
             if self.profile.constantPotential == False: 
                 self.potentials.append(
                         self.profile.potentialGenerator(self.grid, (timeIndex + 1) * self.timeStep)
                     )
+                logFunction(log, "Generated Next Potential")
             knownStepMatrix = self.createCurrentStepMatrix(self.potentials[-2])
+            logFunction(log, "Created knownStepMatrix")
             unknownStepMatrix = self.createNextStepMatrix(self.potentials[-1])
-            self.compute(unknownStepMatrix, knownStepMatrix)
+            logFunction(log, "Created unknownStepMatrix")
+            self.compute(unknownStepMatrix, knownStepMatrix, log, logFunction)
+            logFunction(log, "Computed and Finished \"Step\"")
 
         printWithProgressBar(
                 step, 
@@ -438,6 +470,8 @@ class Simulator:
                 showStepTime, 
                 detailedProgress
             )
+
+        return log
 
     def processProbabilities(self): 
         math = self.math
@@ -502,7 +536,7 @@ def animateImages(
     animationFigure = plt.figure()
     animationAxis = animationFigure.add_subplot(xlim=(0, length), ylim=(0, length))
     animationFrame = animationAxis.imshow(
-            images[0], 
+            asNumPyArray(images[0]), 
             extent=[0, length, 0, length], 
             vmin = minimumValue, 
             vmax = maximumValue, 
@@ -518,7 +552,7 @@ def animateImages(
                 baseAlpha = baseAlpha
             )
     def animateFrame(frameIndex): 
-        animationFrame.set_data(images[frameIndex])
+        animationFrame.set_data(asNumPyArray(images[frameIndex]))
         animationFrame.set_zorder(1)
         return animationFrame,
     animation = FuncAnimation(
