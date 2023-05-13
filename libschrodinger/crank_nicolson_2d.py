@@ -225,7 +225,7 @@ class Simulator:
         nextWaveFunction = matrixSolveMethod(
                     self.profile, 
                     unknownStepMatrix, 
-                    independantTerms, 
+                    independantTerms
             )
         if self.profile.fineGrainedLog == True: 
             logFunction(log, "Fine Grain: Solve for nextWaveFunction")
