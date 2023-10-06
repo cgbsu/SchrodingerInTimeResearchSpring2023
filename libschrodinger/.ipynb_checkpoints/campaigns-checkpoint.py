@@ -50,8 +50,7 @@ def logConstantMeasurementRegionSimulation(
             showWhenSimulationDone : bool = False, 
             basePath = None, 
             animationInterval : int = 30, 
-            colorMap : str = "hot", 
-            recordAllRegionVideos : bool = True
+            colorMap : str = "hot"
         ):
     math = simulator.profile.math
     basePath = basePath if basePath else Path.cwd() / baseName
@@ -93,17 +92,16 @@ def logConstantMeasurementRegionSimulation(
     for ii in range(len(constantRegionLabels)): 
         print("Saving Video of " + constantRegionLabels[ii])
         totalProbabilities[name + "RegionLength::" + constantRegionLabels[ii]] = constantRegionLengths[ii]
-        if recordAllRegionVideos == True: 
-            cutAnimation = animateImages(
-                    length * constantRegionLengths[ii], 
-                    cutFrames[ii], 
-                    animationInterval, 
-                    0, 
-                    math.max(cutFrames[ii]), 
-                    colorMap = colorMap
-                )
-            cutAnimation.save(str(videoPath / (constantRegionLabels[ii] + ".gif")))
-            plt.close()
+        cutAnimation = animateImages(
+                length * constantRegionLengths[ii], 
+                cutFrames[ii], 
+                animationInterval, 
+                0, 
+                math.max(cutFrames[ii]), 
+                colorMap = colorMap
+            )
+        cutAnimation.save(str(videoPath / (constantRegionLabels[ii] + ".gif")))
+        plt.close()
     allData |= totalProbabilities
     if showWhenSimulationDone == True: 
         print("Done logging " + name[:-2])
@@ -117,7 +115,7 @@ def constantSimulationProfiles(
             spatialStep : float, 
             temporalStep : float,
             length : float, 
-            regionLengthRatios : List[float | Rectangle2D], 
+            regionLengthRatios : List[float], 
             regionPotentialRatios : List[List[float]], 
             potentialHeight : float, 
             pointCount : int, 
@@ -128,16 +126,15 @@ def constantSimulationProfiles(
             courantNumber = 1.0, 
             logFunction = None, 
             fineGrainedLog : bool = False, 
-            defaultMatrixSolveMethod : MatrixSolverFunctionType = solveMatrixStandard, 
-            constantPotentialFunction = constantPotentials
+            defaultMatrixSolveMethod : MatrixSolverFunctionType = solveMatrixStandard
         ) -> List[SimulationProfile]:
     if simulateControl == True: 
         regionPotentialRatios.append([0.0 for ii in range(len(regionPotentialRatios[0]))])
     math = ComputationalProfile(gpuAccelerated).math
     profiles : List[SimulationProfile] = []
-    potentialFunction = lambda potentialRatios, position, time : constantPotentialFunction(
+    potentialFunction = lambda potentialRatios, position, time : constantPotentials(
                 position, 
-                regionLengthRatios, 
+                math.array(regionLengthRatios), 
                 potentialRatios, 
                 potentialHeight, 
                 math
@@ -174,9 +171,7 @@ def recordConstantRegionSimulations(
             animationInterval = 30, 
             showBar : bool = False, 
             showFPS : bool = False, 
-            showTotalTime : bool = False, 
-            colorMap : str = "hot", 
-            recordAllRegionVideos : bool = True
+            showTotalTime : bool = False
         ):
     simulations : List[Simulator] = []
     simulationCount : int = 0
@@ -204,9 +199,7 @@ def recordConstantRegionSimulations(
                 constantRegionLabels, 
                 showWhenSimulationDone, 
                 basePath, 
-                animationInterval, 
-                colorMap, 
-                recordAllRegionVideos
+                animationInterval
             )
         simulationCount += 1
     return allData, simulations, logs

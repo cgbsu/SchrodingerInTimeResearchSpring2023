@@ -60,6 +60,8 @@ def printWithProgressBar(
     if showStepTime == True: 
         print("Frames Per Second: ", 1 / performenceAverageStepTime)
 
+animateImagesDefaultTitleFormatString = "Frame: {}"
+
 def animateImages(
             length : float, 
             images : List[np.array], 
@@ -69,7 +71,9 @@ def animateImages(
             lengthRatios = None, 
             potentialRatios = None, 
             baseAlpha : float = .08, 
-            colorMap : str = "viridis"
+            colorMap : str = "viridis", 
+            showFrame : bool = True, 
+            titleFormatString : str = animateImagesDefaultTitleFormatString 
         ): 
     animationFigure = plt.figure()
     animationAxis = animationFigure.add_subplot(xlim=(0, length), ylim=(0, length))
@@ -81,6 +85,10 @@ def animateImages(
             zorder = 1, 
             cmap = colorMap
         )
+    if showFrame == True: 
+        animationAxis.set_title(titleFormatString.format(str(0)))
+    elif titleFormatString != None: 
+        animationAxis.set_title(titleFormatString)
     if lengthRatios and potentialRatios: 
         constantPotentialRectangles(
                 animationAxis, 
@@ -90,6 +98,10 @@ def animateImages(
                 baseAlpha = baseAlpha
             )
     def animateFrame(frameIndex): 
+        if showFrame == True: 
+            animationAxis.set_title(titleFormatString.format(str(frameIndex)))
+        elif titleFormatString != None: 
+            animationAxis.set_title(titleFormatString)
         animationFrame.set_data(asNumPyArray(images[frameIndex]))
         animationFrame.set_zorder(1)
         return animationFrame,

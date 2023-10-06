@@ -6,7 +6,6 @@ from libschrodinger.performence_profiling import *
 
 MatrixSolverFunctionType = Callable[[ComputationalProfile, SparseMatrixType, MatrixType], MatrixType] 
 
-defaultLogFunction : LogFunctionType = lambda log, stepLabel : None
 class SimulationProfile(ComputationalProfile): 
     def __init__(
                 self, 
@@ -22,13 +21,13 @@ class SimulationProfile(ComputationalProfile):
                 courantNumber = 1.0, 
                 courantWarning = True, 
                 length : int = None, 
-                logFunction : LogFunctionType = defaultLogFunction, 
+                logFunction : LogFunctionType = lambda log, stepLabel : None, 
                 fineGrainedLog : bool = False, 
                 defaultMatrixSolveMethod : MatrixSolverFunctionType = solveMatrixStandard
             ): 
         super().__init__(gpuAccelerated)
-        assert(gpuAccelerated == False) if useDense == True else True
-        assert(timeStep / spaceStep) <= courantNumber if courantWarning == True else True, \
+        assert (gpuAccelerated == False) if useDense == True else True
+        assert (timeStep / spaceStep) <= courantNumber if courantWarning == True else True, \
                 "Courant condition not satisfied! timeStep / spaceStep greater than Courant Number (usually 1)"
         self.grid = grid
         self.dimensions = self.grid.dimensions
@@ -40,6 +39,6 @@ class SimulationProfile(ComputationalProfile):
         self.useDense = useDense
         self.constantPotential = constantPotential 
         self.length = length
-        self.logFunction = defaultLogFunction if logFunction == None else logFunction
+        self.logFunction = logFunction
         self.fineGrainedLog = fineGrainedLog
         self.defaultMatrixSolveMethod = defaultMatrixSolveMethod

@@ -313,13 +313,20 @@ class Simulator:
         #    )))
         return self.probabilities, self.probabilityDecibles
 
-def makeWavePacket(grid, startX, startY, spatialStep, sigma = 0.5, k = 15 * np.pi, math = np): 
+def makeWavePacket(grid, startX, startY, spatialStep, sigma = 0.5, k = 15 * np.pi, axis : DimensionIndex = DimensionIndex.X, math = np): 
     #unnormalized = math.exp((-1 / (2 * sigma ** 2)) * ((grid.x - startX) ** 2 + (grid.y - startY) ** 2)) \
             #* math.exp(-1j * k * (grid.x - startX))
     #totalProbability = math.sum(math.sqrt(math.real(unnormalized) ** 2 + math.imag(unnormalized) ** 2))
     #return unnormalized / totalProbability
+    assert (axis == DimensionIndex.X or axis == DimensionIndex.Y), "Only 2 dimensions are supported at this time"
+    if axis == DimensionIndex.X: 
+        motionAxisStartPosition = startX
+        motionGrid = grid.x
+    elif axis == DimensionIndex.Y: 
+        motionAxisStartPosition = startY
+        motionGrid = grid.y
     unnormalized = math.exp(-1 / 2 * ((grid.x - startX) ** 2 + (grid.y - startY) ** 2) / sigma ** 2) \
-            * math.exp(1j * k * (grid.x - startX))
+            * math.exp(1j * k * (motionGrid - motionAxisStartPosition))
     return unnormalized
 
 def totalProbabilityInRegion( # TODO: Find an AVERAGE normalization value to use for the whole thing, then use that.

@@ -13,13 +13,6 @@ from datetime import timedelta
 from time import monotonic
 import sys
 
-@dataclass
-class Rectangle2D: 
-    x : float
-    y : float
-    width : float
-    height : float
-
 def tunnelCase(position, where, width, potential = 1): 
     return np.where(
             (position.x > where) & (position.x < (where + width)), 
@@ -50,18 +43,9 @@ def doubleSlit(position, where, width, slitHeight, gapHeight, potential = 1, mat
             0, 
         )
 
-def constantPotentials(
-            position, 
-            lengthRatios, 
-            potentialRatios, 
-            basePotential, 
-            math = np, 
-            epsilon = 1e-16
-        ): 
+def constantPotentials(position, lengthRatios, potentialRatios, basePotential, math = np, epsilon = 1e-16): 
     regionCount = len(lengthRatios)
     assert regionCount == len(potentialRatios)
-    potentialRatios = math.array(potentialRatios)
-    lengthRatios = math.array(lengthRatios)
     assert (math.sum(lengthRatios) - 1.0) < epsilon
     potential = position.x * 0.0
     basePosition = math.min(position.x)
@@ -87,44 +71,3 @@ def uniformTimeScaledPotentials(position, time, totalTime, delay, duration, leng
             potentialHeight * timeScalar, 
             math = math
         )
-
-def axisAlignedBlocks(
-            position, 
-            boxes : List[Rectangle2D], 
-            potentialRatios : List[float], 
-            potentialHeight : float, 
-            math = np
-        ): 
-    assert len(potentialRatios) == len(boxes)
-    potential = position.x * 0.0
-    #print(math.max(position.x), math.min(position.x))
-    xExtent = math.abs(math.max(position.x) - math.min(position.x))
-    yExtent = math.abs(math.max(position.y) - math.min(position.y))
-    xMinimum = math.min(position.x)
-    yMinimum = math.min(position.y)
-    boxXs = []
-    boxYs = []
-    boxWidths = []
-    boxHeights = []
-    for box in boxes: 
-        boxXs.append(box.x)
-        boxYs.append(box.y)
-        boxWidths.append(box.width)
-        boxHeights.append(box.height)
-    boxXs = math.array(boxXs)
-    boxYs = math.array(boxYs)
-    boxHeights = math.array(boxHeights)
-    boxWidths = math.array(boxWidths)
-    potentialRatios = math.array(potentialRatios)
-    decomposed = zip(boxXs, boxYs, boxWidths, boxHeights, potentialRatios)
-    for boxX, boxY, boxWidth, boxHeight, potentialRatio in decomposed: 
-        xUpperBound : float = xMinimum + (xExtent * (boxX + boxWidth))
-        yUpperBound : float = yMinimum + (yExtent * (boxY + boxHeight))
-        xLowerBound : float = xMinimum + (xExtent * boxX)
-        yLowerBound : float = yMinimum + (yExtent * boxY)
-        xCondition = (position.x >= xLowerBound) & (position.x <= xUpperBound)
-        yCondition = (position.y >= yLowerBound) & (position.y <= yUpperBound)
-        #print(xLowerBound, xUpperBound, yUpperBound, yLowerBound)
-        potential = math.where(xCondition & yCondition, potentialRatio * potentialHeight, potential)
-    return potential 
-
