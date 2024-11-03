@@ -129,7 +129,8 @@ def constantSimulationProfiles(
             logFunction = None, 
             fineGrainedLog : bool = False, 
             defaultMatrixSolveMethod : MatrixSolverFunctionType = solveMatrixStandard, 
-            constantPotentialFunction = constantPotentials
+            constantPotentialFunction = constantPotentials, 
+            dimensions : int = 2
         ) -> List[SimulationProfile]:
     if simulateControl == True: 
         regionPotentialRatios.append([0.0 for ii in range(len(regionPotentialRatios[0]))])
@@ -144,7 +145,7 @@ def constantSimulationProfiles(
         )
     for potentialRatios in regionPotentialRatios: 
         profile = SimulationProfile(
-            makeLinspaceGrid(pointCount, length, 2, False, float, math), 
+            makeLinspaceGrid(pointCount, length, dimensions, False, float, math), 
             initialWaveFunction, 
             partial(potentialFunction, potentialRatios), 
             temporalStep, 
