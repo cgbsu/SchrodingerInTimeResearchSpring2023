@@ -6,7 +6,7 @@ Some samples from simulations
     <td>
         <td>|Ψ|\*|Ψ|</td>
         <td>V(x, t)</td>
-    </td>
+    </tr>
     <tr>
         <td><img src="Assets/5.gif"/></td>
         <td><img src="Assets/5Potential.png"/></td>
