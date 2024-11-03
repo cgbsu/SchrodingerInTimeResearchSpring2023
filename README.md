@@ -8,16 +8,16 @@ Some samples from simulations
         <td>V(x, t)</td>
     </td>
     <tr>
-        <td><img src="Assets/5.gif"></td>
-        <td><img src="Assets/5Potential.png"></td>
+        <td><img src="Assets/5.gif"/></td>
+        <td><img src="Assets/5Potential.png"/></td>
     </tr>
     <tr>
-        <td><img src="Assets/6.gif"></td>
-        <td><img src="Assets/6Potential.png"></td>
+        <td><img src="Assets/6.gif"/></td>
+        <td><img src="Assets/6Potential.png"/></td>
     </tr>
     <tr>
-        <td><img src="Assets/7.gif"></td>
-        <td><img src="Assets/7Potential.png"></td>
+        <td><img src="Assets/7.gif"/></td>
+        <td><img src="Assets/7Potential.png"/></td>
     </tr>
 </table>
 
