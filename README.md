@@ -3,7 +3,7 @@
 Some samples from simulations
 
 <table>
-    <td>
+    <tr>
         <td>|Ψ|*|Ψ|</td>
         <td>V(x, t)</td>
     </tr>
